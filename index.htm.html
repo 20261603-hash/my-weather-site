@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ko" class="">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실시간 날씨 대시보드 (오프라인/파일 실행 최적화)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class'
+        }
+    </script>
+    <style>
+        .scrollbar-none::-webkit-scrollbar { display: none; }
+        .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body id="weather-bg" class="bg-gradient-to-b from-blue-500 to-indigo-700 min-h-screen text-white transition-all duration-500 dark:from-slate-800 dark:to-slate-950">
+
+    <div class="max-w-4xl mx-auto p-4 sm:p-6">
+        <!-- 상단 헤더 -->
+        <header class="flex flex-col sm:flex-row justify-between items-center gap-4 mb-6 sm:mb-8">
+            <div class="flex items-center gap-2">
+                <span class="text-2xl sm:text-3xl">🌤️</span>
+                <h1 class="text-xl sm:text-2xl font-bold tracking-wider">LIVE WEATHER</h1>
+            </div>
+            
+            <!-- 상단 제어 바 (도시 선택 + 버튼 플렉스) -->
+            <div class="flex flex-wrap items-center justify-center gap-2 w-full sm:w-auto">
+                <!-- 지역 수동 선택 셀렉트 박스 (GPS 차단/파일 실행 대비) -->
+                <select id="city-selector" class="bg-white/20 dark:bg-slate-700 text-white border-none rounded-xl px-3 py-1.5 text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer">
+                    <option value="auto" class="text-slate-900" selected>📍 내 위치 (자동)</option>
+                    <option value="seoul" class="text-slate-900">서울</option>
+                    <option value="busan" class="text-slate-900">부산</option>
+                    <option value="incheon" class="text-slate-900">인천</option>
+                    <option value="daegu" class="text-slate-900">대구</option>
+                    <option value="daejeon" class="text-slate-900">대전</option>
+                    <option value="gwangju" class="text-slate-900">광주</option>
+                    <option value="ulsan" class="text-slate-900">울산</option>
+                    <option value="jeju" class="text-slate-900">제주도</option>
+                </select>
+
+                <button id="refresh-btn" class="bg-white/10 hover:bg-white/20 dark:bg-slate-700 dark:hover:bg-slate-600 px-3 py-1.5 rounded-xl text-xs sm:text-sm transition flex items-center gap-1">
+                    🔄 갱신
+                </button>
+                <button id="theme-toggle" class="bg-white/20 hover:bg-white/30 dark:bg-slate-700 dark:hover:bg-slate-600 px-3 py-1.5 rounded-xl text-xs sm:text-sm transition">
+                    🌙 모드
+                </button>
+            </div>
+        </header>
+
+        <!-- 메인 콘텐츠 영역 -->
+        <main class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <!-- 좌측/중앙: 현재 날씨 메인 카드 -->
+            <section class="md:col-span-2 bg-white/10 dark:bg-slate-800/40 backdrop-blur-md p-6 rounded-2xl shadow-xl border border-white/10 flex flex-col justify-between min-h-[240px]">
+                <div>
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h2 id="location-name" class="text-2xl sm:text-3xl font-bold tracking-tight">날씨 데이터를 불러오는 중...</h2>
+                            <p id="weather-desc" class="text-base sm:text-lg opacity-80 mt-1">네트워크 및 GPS 상태를 확인하고 있습니다.</p>
+                        </div>
+                        <div id="weather-icon" class="text-5xl sm:text-6xl filter drop-shadow-md">⏳</div>
+                    </div>
+                    <div class="mt-6 flex items-baseline">
+                        <span id="current-temp" class="text-6xl sm:text-7xl font-extrabold tracking-tighter">--</span>
+                        <span class="text-2xl sm:text-3xl font-medium ml-1">°C</span>
+                    </div>
+                </div>
+                
+                <!-- 어제와의 비교 데이터 -->
+                <div class="mt-6 pt-4 border-t border-white/10">
+                    <p id="temp-comparison" class="text-xs sm:text-sm bg-black/20 dark:bg-black/40 inline-block px-3 py-1.5 rounded-xl font-medium">
+                        어제 동시간대 기온 분석 대기 중...
+                    </p>
+                </div>
+            </section>
+
+            <!-- 우측: 대기질 및 생활 기상 지수 -->
+            <section class="flex flex-col gap-4 sm:gap-6">
+                <!-- 미세먼지 및 대기질 (AQI) -->
+                <div class="bg-white/10 dark:bg-slate-800/40 backdrop-blur-md p-5 rounded-2xl shadow-xl border border-white/10">
+                    <h3 class="text-xs sm:text-sm font-medium opacity-75 mb-3 flex items-center gap-1">🍃 미세먼지 및 대기질 (US AQI)</h3>
+                    <div class="flex items-center justify-between">
+                        <span id="aqi-status" class="text-lg sm:text-xl font-bold">확인 중</span>
+                        <span id="aqi-value" class="text-xs font-semibold px-2 py-1 rounded-lg bg-white/10">PM2.5: -- ㎍/㎥</span>
+                    </div>
+                    <!-- 상태 바 -->
+                    <div class="w-full bg-white/20 dark:bg-slate-700 h-2 rounded-full mt-3 overflow-hidden">
+                        <div id="aqi-bar" class="bg-white h-full transition-all duration-500" style="width: 0%;"></div>
+                    </div>
+                </div>
+
+                <!-- 스마트 생활 기상 지수 -->
+                <div class="bg-white/10 dark:bg-slate-800/40 backdrop-blur-md p-5 rounded-2xl shadow-xl border border-white/10 flex-1 flex flex-col justify-between gap-4">
+                    <h3 class="text-xs sm:text-sm font-medium opacity-75">🎯 오늘의 생활 지수 제안</h3>
+                    <div class="grid grid-cols-2 gap-3 text-xs sm:text-sm">
+                        <div class="bg-black/10 dark:bg-black/20 p-2.5 rounded-xl">
+                            <span class="block opacity-60 text-[11px] mb-0.5">우산 필요성</span>
+                            <span id="idx-umbrella" class="font-bold text-sm">--</span>
+                        </div>
+                        <div class="bg-black/10 dark:bg-black/20 p-2.5 rounded-xl">
+                            <span class="block opacity-60 text-[11px] mb-0.5">야외 세차</span>
+                            <span id="idx-carwash" class="font-bold text-sm">--</span>
+                        </div>
+                        <div class="bg-black/10 dark:bg-black/20 p-2.5 rounded-xl">
+                            <span class="block opacity-60 text-[11px] mb-0.5">빨래 건조</span>
+                            <span id="idx-laundry" class="font-bold text-sm">--</span>
+                        </div>
+                        <div class="bg-black/10 dark:bg-black/20 p-2.5 rounded-xl">
+                            <span class="block opacity-60 text-[11px] mb-0.5">체감 온도</span>
+                            <span id="idx-feelslike" class="font-bold text-sm">--°C</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 하단: 시간별 예보 및 오픈소스 크레딧 -->
+        <footer class="grid grid-cols-1 gap-6">
+            <!-- 6시간 단위 타임라인 예보 -->
+            <div class="bg-white/10 dark:bg-slate-800/40 backdrop-blur-md p-5 rounded-2xl shadow-xl border border-white/10">
+                <h3 class="text-sm font-semibold mb-3 flex items-center gap-1">⏱️ 실시간 시간별 흐름 예보</h3>
+                <div id="hourly-forecast" class="flex gap-3 overflow-x-auto pb-1 scrollbar-none justify-between">
+                    <div class="text-center w-full py-4 opacity-60 text-xs">데이터 로딩 완료 후 타임라인이 표시됩니다.</div>
+                </div>
+            </div>
+
+            <!-- 데이터 제공 출처 명시 -->
+            <div class="text-center text-[11px] opacity-50 mt-2">
+                <p>본 사이트는 회원가입/인증키가 필요 없는 오픈소스 <a href="https://open-meteo.com/" target="_blank" class="underline hover:opacity-100">Open-Meteo</a> API 데이터 기반으로 작동합니다.</p>
+                <p class="mt-1">로컬 파일 실행(`.html`) 및 보안 브라우저 환경에서도 자동 타임아웃 백업 기능으로 완벽히 구동됩니다.</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- 비즈니스 로직 스크립트 -->
+    <script>
+        // 사전 설정 데이터
+        const CONFIG = {
+            CACHE_EXPIRY: 10 * 60 * 1000, // 10분 캐싱
+            CITY_COORDS: {
+                seoul: { lat: 37.5665, lon: 126.9780, name: "서울특별시" },
+                busan: { lat: 35.1796, lon: 129.0756, name: "부산광역시" },
+                incheon: { lat: 37.4563, lon: 126.7052, name: "인천광역시" },
+                daegu: { lat: 35.8714, lon: 128.6014, name: "대구광역시" },
+                daejeon: { lat: 36.3504, lon: 127.3848, name: "대전광역시" },
+                gwangju: { lat: 35.1595, lon: 126.8526, name: "광주광역시" },
+                ulsan: { lat: 35.5389, lon: 129.3114, name: "울산광역시" },
+                jeju: { lat: 33.4996, lon: 126.5312, name: "제주특별자치도" }
+            },
+            DEFAULT_KEY: 'seoul'
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initTheme();
+            initCitySelector();
+            loadWeatherData();
+
+            // 갱신 버튼 이벤트
+            document.getElementById('refresh-btn').addEventListener('click', () => {
+                const btn = document.getElementById('refresh-btn');
+                btn.innerText = "⏳ ...";
+                localStorage.clear(); // 캐시 강제 삭제
+                loadWeatherData(() => {
+                    btn.innerText = "🔄 갱신";
+                });
+            });
+        });
+
+        // 다크모드 토글 엔진
+        function initTheme() {
+            const toggleBtn = document.getElementById('theme-toggle');
+            if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+
+            toggleBtn.addEventListener('click', () => {
+                if (document.documentElement.classList.contains('dark')) {
+                    document.documentElement.classList.remove('dark');
+                    localStorage.theme = 'light';
+                } else {
+                    document.documentElement.classList.add('dark');
+                    localStorage.theme = 'dark';
+                }
+            });
+        }
+
+        // 도시 선택 셀렉트 박스 리스너 정의
+        function initCitySelector() {
+            const selector = document.getElementById('city-selector');
+            selector.addEventListener('change', () => {
+                loadWeatherData();
+            });
+        }
+
+        // 핵심 데이터 수집 관리 제어기
+        function loadWeatherData(callback = null) {
+            const selector = document.getElementById('city-selector');
+            const selectedValue = selector.value;
+
+            // 1. 특정 도시가 수동 선택된 경우 즉시 해당 좌표 데이터 호출
+            if (selectedValue !== 'auto') {
+                const target = CONFIG.CITY_COORDS[selectedValue];
+                fetchFullWeather(target.lat, target.lon, target.name).then(() => { if(callback) callback(); });
+                return;
+            }
+
+            // 2. 자동 위치(GPS) 선택인 경우
+            // 로컬 파일 실행(file:///) 환경이나 일부 브라우저에서는 GPS 응답을 영원히 대기하거나 거부할 수 있으므로, 2.5초 타임아웃 세이프 가드 장착
+            if (!navigator.geolocation) {
+                console.log("GPS 미지원 브라우저 환경입니다. 기본값(서울)으로 호출합니다.");
+                loadDefaultCity();
+                if(callback) callback();
+                return;
+            }
+
+            // 세이프 타임아웃 설정 (2.5초 동안 GPS 응답 없으면 먹통 방지를 위해 자동 서울 처리)
+            const gpsSafeTimeout = setTimeout(() => {
+                console.warn("GPS 응답 한계 시간 초과 -> 자동 기본 도시(서울) 매핑");
+                selector.value = CONFIG.DEFAULT_KEY; // 셀렉터 값을 서울로 강제 변경
+                loadDefaultCity();
+                if(callback) callback();
+            }, 2500);
+
+            navigator.geolocation.getCurrentPosition(async (position) => {
+                clearTimeout(gpsSafeTimeout); // GPS 정상 응답 시 타임아웃 해제
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                
+                // 역지오코딩 시도 (Nominatim 가끔 차단되므로 예외 철저 배제)
+                let cityName = "내 주변 지역";
+                try {
+                    const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=ko`);
+                    const geoData = await geoRes.json();
+                    if(geoData && geoData.address) {
+                        cityName = geoData.address.city || geoData.address.province || geoData.address.borough || geoData.address.county || "내 주변 지역";
+                    }
+                } catch(e) {
+                    console.log("도시 이름 변환 우회 -> 좌표 연동");
+                }
+
+                await fetchFullWeather(lat, lon, cityName);
+                if(callback) callback();
+            }, (error) => {
+                clearTimeout(gpsSafeTimeout); // 에러 발생 시 타임아웃 해제
+                console.log("GPS 거부 또는 권한 누락 -> 기본값(서울) 매핑");
+                selector.value = CONFIG.DEFAULT_KEY;
+                loadDefaultCity();
+                if(callback) callback();
+            });
+        }
+
+        // 기본 안전 도시 로더
+        function loadDefaultCity() {
+            const def = CONFIG.CITY_COORDS[CONFIG.DEFAULT_KEY];
+            fetchFullWeather(def.lat, def.lon, def.name);
+        }
+
+        // Open-Meteo API 호출 및 캐싱 로직
+        async function fetchFullWeather(lat, lon, cityName) {
+            const cacheKey = `secure_weather_${lat.toFixed(2)}_${lon.toFixed(2)}`;
+            const cachedData = localStorage.getItem(cacheKey);
+            const cachedTime = localStorage.getItem(`${cacheKey}_time`);
+            const now = Date.now();
+
+            if (cachedData && cachedTime && (now - cachedTime < CONFIG.CACHE_EXPIRY)) {
+                renderUI(JSON.parse(cachedData), cityName);
+                return;
+            }
+
+            try {
+                // 과거 1일 데이터(past_days=1)를 가져와서 클라이언트 시스템 시각과 무관하게 API의 리턴 타임 축 기준으로 어제 비교 수행
+                const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&past_days=1&timezone=auto`;
+                const weatherRes = await fetch(weatherUrl);
+                const weatherData = await weatherRes.json();
+
+                const aqiUrl = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=pm2_5,pm10,us_aqi`;
+                const aqiRes = await fetch(aqiUrl);
+                const aqiData = await aqiRes.json();
+
+                const result = { weather: weatherData, aqi: aqiData };
+                
+                localStorage.setItem(cacheKey, JSON.stringify(result));
+                localStorage.setItem(`${cacheKey}_time`, now);
+
+                renderUI(result, cityName);
+            } catch (err) {
+                console.error("통신 실패", err);
+                document.getElementById('location-name').innerText = "오프라인 상태이거나 API 주소가 올바르지 않습니다.";
+            }
+        }
+
+        // 기상 조건 매핑 파서
+        function parseWMOCode(code) {
+            if (code === 0) return { desc: "맑고 화창함", icon: "☀️", condition: "Clear" };
+            if ([1, 2, 3].includes(code)) return { desc: "구름 조금 흐림", icon: "⛅", condition: "Clouds" };
+            if ([45, 48].includes(code)) return { desc: "안개 주의", icon: "🌫️", condition: "Atmosphere" };
+            if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return { desc: "비 또는 소나기", icon: "🌧️", condition: "Rain" };
+            if ([71, 73, 75, 77, 85, 86].includes(code)) return { desc: "눈 소식", icon: "❄️", condition: "Snow" };
+            if ([95, 96, 99].includes(code)) return { desc: "천둥번개 낙뢰", icon: "⛈️", condition: "Thunderstorm" };
+            return { desc: "흐린 구름", icon: "🌤️", condition: "Clouds" };
+        }
+
+        // 통합 화면 렌더링 엔진
+        function renderUI(data, cityName) {
+            const current = data.weather.current;
+            const weatherMeta = parseWMOCode(current.weather_code);
+
+            document.getElementById('location-name').innerText = cityName;
+            document.getElementById('weather-desc').innerText = weatherMeta.desc;
+            document.getElementById('weather-icon').innerText = weatherMeta.icon;
+            document.getElementById('current-temp').innerText = current.temperature_2m.toFixed(1);
+            document.getElementById('idx-feelslike').innerText = `${current.apparent_temperature.toFixed(1)}°C`;
+
+            // 정밀 시간 인덱싱 기법 적용 (기기 오차 무관하도록 API 데이터 내부의 타임스탬프 문양 추적)
+            try {
+                const hourly = data.weather.hourly;
+                const apiCurrentTime = current.time; // 예: "2026-06-11T14:00"
+                const currentIndex = hourly.time.indexOf(apiCurrentTime);
+
+                // 어제 온도 차이 연산 (정확히 24칸 전 인덱스 매칭)
+                if (currentIndex !== -1 && currentIndex >= 24) {
+                    const yesterdayTemp = hourly.temperature_2m[currentIndex - 24];
+                    const tempDiff = current.temperature_2m - yesterdayTemp;
+                    const compEl = document.getElementById('temp-comparison');
+
+                    if (tempDiff < 0) {
+                        compEl.innerHTML = `어제 이 시간대보다 <span class="text-blue-300 font-bold">📉 ${Math.abs(tempDiff).toFixed(1)}°C</span> 낮습니다.`;
+                    } else if (tempDiff > 0) {
+                        compEl.innerHTML = `어제 이 시간대보다 <span class="text-red-400 font-bold">📈 ${tempDiff.toFixed(1)}°C</span> 높습니다.`;
+                    } else {
+                        compEl.innerText = `어제 이 시간대 기온과 소름 돋게 일치합니다.`;
+                    }
+                }
+
+                // 하단 6시간 흐름 컴포넌트 생성
+                if (currentIndex !== -1) {
+                    let hourlyHtml = '';
+                    for (let i = currentIndex; i < currentIndex + 6 && i < hourly.time.length; i++) {
+                        const timeLabel = hourly.time[i].split('T')[1];
+                        const tempVal = hourly.temperature_2m[i];
+                        const codeVal = hourly.weather_code[i];
+                        const mapped = parseWMOCode(codeVal);
+
+                        hourlyHtml += `
+                            <div class="flex flex-col items-center bg-white/5 dark:bg-slate-700/50 p-3 rounded-xl min-w-[75px] flex-1 border border-white/5 shadow-md">
+                                <span class="text-[11px] opacity-75">${timeLabel}</span>
+                                <span class="text-2xl my-1">${mapped.icon}</span>
+                                <span class="text-xs font-bold">${tempVal.toFixed(1)}°C</span>
+                            </div>
+                        `;
+                    }
+                    document.getElementById('hourly-forecast').innerHTML = hourlyHtml;
+                }
+            } catch (e) {
+                console.error("타임라인 생성 지연 발생", e);
+            }
+
+            // 대기질 렌더링
+            const currentAqi = data.aqi.current;
+            const usAqi = currentAqi.us_aqi;
+            const pm25Val = currentAqi.pm2_5;
+            
+            const aqiStatusEl = document.getElementById('aqi-status');
+            const aqiValueEl = document.getElementById('aqi-value');
+            const aqiBarEl = document.getElementById('aqi-bar');
+
+            aqiValueEl.innerText = `PM2.5: ${pm25Val.toFixed(1)} ㎍/㎥`;
+            
+            if (usAqi <= 50) {
+                aqiStatusEl.innerText = "🍃 좋음";
+                aqiStatusEl.className = "text-emerald-300 font-bold text-lg sm:text-xl";
+                aqiBarEl.className = "bg-emerald-400 h-full transition-all duration-500";
+                aqiBarEl.style.width = `${Math.max(usAqi, 20)}%`;
+            } else if (usAqi <= 100) {
+                aqiStatusEl.innerText = "💛 보통";
+                aqiStatusEl.className = "text-yellow-200 font-bold text-lg sm:text-xl";
+                aqiBarEl.className = "bg-yellow-300 h-full transition-all duration-500";
+                aqiBarEl.style.width = `${usAqi}%`;
+            } else {
+                aqiStatusEl.innerText = "⚠️ 나쁨";
+                aqiStatusEl.className = "text-orange-400 font-bold text-lg sm:text-xl";
+                aqiBarEl.className = "bg-orange-400 h-full transition-all duration-500";
+                aqiBarEl.style.width = "100%";
+            }
+
+            // 조건별 지수 매핑
+            const idxUmbrella = document.getElementById('idx-umbrella');
+            const idxCarwash = document.getElementById('idx-carwash');
+            const idxLaundry = document.getElementById('idx-laundry');
+
+            if (current.precipitation > 0 || ["Rain", "Thunderstorm"].includes(weatherMeta.condition)) {
+                idxUmbrella.innerText = "☔ 우산 필수";
+                idxUmbrella.className = "font-bold text-sm text-blue-300";
+                idxCarwash.innerText = "❌ 비추천";
+                idxLaundry.innerText = "🧺 실내 건조";
+            } else {
+                idxUmbrella.innerText = "❌ 대기 맑음";
+                idxUmbrella.className = "font-bold text-sm text-white opacity-90";
+                idxCarwash.innerText = "🚗 강추";
+                idxLaundry.innerText = current.relative_humidity_2m > 70 ? "☁️ 실내 건조" : "👕 야외 최고";
+            }
+
+            changeDynamicBackground(weatherMeta.condition);
+        }
+
+        // 실시간 그라데이션 전환 제어
+        function changeDynamicBackground(condition) {
+            const bgEl = document.getElementById('weather-bg');
+            if (document.documentElement.classList.contains('dark')) return;
+
+            if (condition === "Rain" || condition === "Thunderstorm") {
+                bgEl.className = "bg-gradient-to-b from-slate-600 to-slate-800 min-h-screen text-white transition-all duration-500";
+            } else if (condition === "Clear") {
+                bgEl.className = "bg-gradient-to-b from-amber-500 to-orange-600 min-h-screen text-white transition-all duration-500";
+            } else if (condition === "Snow") {
+                bgEl.className = "bg-gradient-to-b from-sky-400 to-blue-500 min-h-screen text-white transition-all duration-500";
+            } else {
+                bgEl.className = "bg-gradient-to-b from-blue-500 to-indigo-700 min-h-screen text-white transition-all duration-500";
+            }
+        }
+    </script>
+</body>
+</html>
